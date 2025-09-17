@@ -15,8 +15,7 @@ export default function AdminPage() {
 
   // connect to WS server
   function connect() {
-    const host = "210.131.215.189";
-    const url = `ws://${host}:4000`;
+    const url = `wss://cfws.tokuzou.moe`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
