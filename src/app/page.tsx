@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Order = {
   id: number;
@@ -12,6 +13,13 @@ export default function AdminPage() {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
+
+  // --- 追加: クエリパラメータを読む ---
+  const searchParams = useSearchParams();
+  const headerReverse = searchParams?.get("header_reverse") === "true";
+  // header=false のときはヘッダーを非表示にする
+  const hideHeader = searchParams?.get("header") === "false";
+  // --- 追加ここまで ---
 
   // connect to WS server
   function connect() {
@@ -80,7 +88,9 @@ export default function AdminPage() {
   // layout: large circular buttons (admin style)
   return (
     <div className="min-h-screen p-6 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white">
-      <header className="max-w-6xl mx-auto mb-6 flex items-center justify-between">
+      <header
+        className={`max-w-6xl mx-auto mb-6 flex items-center justify-between ${headerReverse ? "flex-row-reverse text-right" : ""} ${hideHeader ? "hidden" : ""}`}
+      >
         <div>
           <h1 className="text-3xl font-bold">オーダー管理（管理画面）</h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
@@ -90,7 +100,7 @@ export default function AdminPage() {
         <div className="flex items-center gap-4">
           <button
             onClick={addOrder}
-            className="btn-primary rounded-lg px-5 py-3 text-lg font-semibold shadow-lg"
+            className="btn-primary rounded-lg px-10 py-5 text-3xl font-semibold shadow-lg"
             aria-label="+ オーダー発行"
           >
             + 発行
