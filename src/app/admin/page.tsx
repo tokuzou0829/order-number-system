@@ -121,9 +121,12 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    fetchData();
+    const initialTimer = window.setTimeout(fetchData, 0);
     const timer = window.setInterval(fetchData, 1500);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
   }, [fetchData]);
 
   const waiting = orders.filter((order) => order.status === "waiting");
