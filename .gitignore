@@ -20,6 +20,10 @@
 # production
 /build
 
+# runtime order log
+/server/data/*.json
+/server/data/*.tmp
+
 # misc
 .DS_Store
 *.pem
@@ -32,6 +36,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel

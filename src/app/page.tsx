@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { WS_BASE } from "@/lib/api";
 
 type Order = {
   id: number;
@@ -23,8 +24,7 @@ export default function AdminPage() {
 
   // connect to WS server
   function connect() {
-    const url = `wss://cfws.tokuzou.moe`;
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(WS_BASE);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
@@ -93,9 +93,6 @@ export default function AdminPage() {
       >
         <div>
           <h1 className="text-3xl font-bold">オーダー管理（管理画面）</h1>
-          <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            +ボタンで新しい番号を発行。ボタンは1回押すと「呼び出し中」、もう1回で完了して削除。
-          </p>
         </div>
         <div className="flex items-center gap-4">
           <button

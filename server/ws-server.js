@@ -1,46 +1,115 @@
 /**
- * WebSocket order server with simple HTTP control endpoints
+ * WebSocket order server with JSON-file persistence.
  *
- * WebSocket protocol (JSON messages) retained:
- * - { type: "subscribe" }            => server replies with { type: "state", orders: [...] }
- * - { type: "add" }                  => server creates new order { id, status: "waiting" } and broadcasts state
- * - { type: "toggle", id: number }   => server toggles order:
- *       waiting -> calling
- *       calling -> removed (completed)
- *   then broadcasts state
- *
- * HTTP endpoints (port 4000):
- * - GET  /state      => { orders: [...] }
- * - POST /reset      => resets orders to empty, returns { ok: true }
- * - POST /add        => creates a new order, returns created order
- * - POST /toggle     => body { id } toggles same as WS toggle
- *
- * CORS: simple wildcard allowed for browser admin UI usage.
- *
- * Run: node server/ws-server.js
- * Note: requires `ws` package (npm/yarn/pnpm add ws)
+ * An order stays in the log from creation until an admin reset. Active orders
+ * (waiting/calling) are broadcast to the operation and customer screens, while
+ * completed orders remain available from GET /history.
  */
 
+const fs = require("fs");
 const http = require("http");
+const path = require("path");
 const WebSocket = require("ws");
 
-const PORT = 4000;
+const PORT = Number(process.env.PORT) || 4000;
+const DATA_FILE = process.env.ORDER_DATA_FILE
+  ? path.resolve(process.env.ORDER_DATA_FILE)
+  : path.join(__dirname, "data", "orders.json");
 
-let orders = [];
-let nextId = 1;
+const emptyStore = () => ({ version: 1, nextId: 1, orders: [] });
 
-function broadcastState(wss) {
-  const msg = JSON.stringify({ type: "state", orders });
-  for (const client of wss.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(msg);
+function loadStore() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    if (!Array.isArray(parsed.orders)) throw new Error("orders must be an array");
+
+    const maxId = parsed.orders.reduce(
+      (max, order) => Math.max(max, Number(order.id) || 0),
+      0,
+    );
+
+    return {
+      version: 1,
+      nextId: Math.max(Number(parsed.nextId) || 1, maxId + 1),
+      orders: parsed.orders,
+    };
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.error(`Could not load ${DATA_FILE}; starting with an empty log.`, error);
     }
+    return emptyStore();
   }
 }
 
-// HTTP server to provide simple control endpoints for admin UI
+let store = loadStore();
+
+function saveStore() {
+  const directory = path.dirname(DATA_FILE);
+  const temporaryFile = `${DATA_FILE}.tmp`;
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(temporaryFile, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  fs.renameSync(temporaryFile, DATA_FILE);
+}
+
+function activeOrders() {
+  return store.orders.filter(
+    (order) => order.status === "waiting" || order.status === "calling",
+  );
+}
+
+function publicHistory() {
+  return [...store.orders].sort((a, b) => b.id - a.id);
+}
+
+function createOrder() {
+  const order = {
+    id: store.nextId++,
+    status: "waiting",
+    createdAt: new Date().toISOString(),
+    providedAt: null,
+    completedAt: null,
+    providedInSeconds: null,
+  };
+  store.orders.push(order);
+  saveStore();
+  return order;
+}
+
+function toggleOrder(id) {
+  const order = store.orders.find(
+    (candidate) => candidate.id === id && candidate.status !== "completed",
+  );
+  if (!order) return null;
+
+  const now = new Date();
+  if (order.status === "waiting") {
+    order.status = "calling";
+    order.providedAt = now.toISOString();
+    order.providedInSeconds = Math.max(
+      0,
+      Math.round((now.getTime() - new Date(order.createdAt).getTime()) / 1000),
+    );
+  } else {
+    order.status = "completed";
+    order.completedAt = now.toISOString();
+  }
+  saveStore();
+  return order;
+}
+
+function broadcastState(wss) {
+  const message = JSON.stringify({ type: "state", orders: activeOrders() });
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(message);
+  }
+}
+
+function jsonResponse(res, status, headers, body) {
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(body));
+}
+
 const server = http.createServer((req, res) => {
-  // basic CORS headers for browser usage
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
@@ -55,33 +124,37 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/state") {
-    res.writeHead(200, headers);
-    res.end(JSON.stringify({ orders }));
+    jsonResponse(res, 200, headers, { orders: activeOrders() });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/history") {
+    jsonResponse(res, 200, headers, { orders: publicHistory() });
     return;
   }
 
   if (req.method === "POST" && req.url === "/reset") {
-    orders = [];
-    nextId = 1;
-    // broadcast new empty state after reset
-    broadcastState(wss);
-    res.writeHead(200, headers);
-    res.end(JSON.stringify({ ok: true }));
+    try {
+      store = emptyStore();
+      saveStore();
+      broadcastState(wss);
+      jsonResponse(res, 200, headers, { ok: true });
+    } catch (error) {
+      console.error("Failed to reset order log", error);
+      jsonResponse(res, 500, headers, { error: "failed to save order log" });
+    }
     return;
   }
 
   if (req.method === "POST" && req.url === "/add") {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk.toString();
-    });
-    req.on("end", () => {
-      const order = { id: nextId++, status: "waiting" };
-      orders.push(order);
+    try {
+      const order = createOrder();
       broadcastState(wss);
-      res.writeHead(200, headers);
-      res.end(JSON.stringify(order));
-    });
+      jsonResponse(res, 200, headers, order);
+    } catch (error) {
+      console.error("Failed to create order", error);
+      jsonResponse(res, 500, headers, { error: "failed to save order" });
+    }
     return;
   }
 
@@ -93,75 +166,49 @@ const server = http.createServer((req, res) => {
     req.on("end", () => {
       try {
         const parsed = body ? JSON.parse(body) : {};
-        const id = Number(parsed && parsed.id);
-        const idx = orders.findIndex((o) => o.id === id);
-        if (idx === -1) {
-          res.writeHead(404, headers);
-          res.end(JSON.stringify({ error: "not found" }));
+        const order = toggleOrder(Number(parsed.id));
+        if (!order) {
+          jsonResponse(res, 404, headers, { error: "not found" });
           return;
         }
-        const o = orders[idx];
-        if (o.status === "waiting") {
-          o.status = "calling";
-        } else {
-          // calling -> complete -> remove
-          orders.splice(idx, 1);
-        }
         broadcastState(wss);
-        res.writeHead(200, headers);
-        res.end(JSON.stringify({ ok: true }));
-      } catch (e) {
-        res.writeHead(400, headers);
-        res.end(JSON.stringify({ error: "invalid body" }));
+        jsonResponse(res, 200, headers, { ok: true, order });
+      } catch (error) {
+        console.error("Failed to update order", error);
+        jsonResponse(res, 400, headers, { error: "invalid body or save failed" });
       }
     });
     return;
   }
 
-  res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "not found" }));
+  jsonResponse(res, 404, headers, { error: "not found" });
 });
 
-// attach WebSocket server to the same HTTP server
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws) => {
-  // send current state on connect
-  ws.send(JSON.stringify({ type: "state", orders }));
+  ws.send(JSON.stringify({ type: "state", orders: activeOrders() }));
 
   ws.on("message", (data) => {
     try {
-      const msg = JSON.parse(data.toString());
-      if (!msg || typeof msg.type !== "string") return;
+      const message = JSON.parse(data.toString());
+      if (!message || typeof message.type !== "string") return;
 
-      if (msg.type === "subscribe") {
-        ws.send(JSON.stringify({ type: "state", orders }));
-      } else if (msg.type === "add") {
-        const order = { id: nextId++, status: "waiting" };
-        orders.push(order);
+      if (message.type === "subscribe") {
+        ws.send(JSON.stringify({ type: "state", orders: activeOrders() }));
+      } else if (message.type === "add") {
+        createOrder();
         broadcastState(wss);
-      } else if (msg.type === "toggle" && typeof msg.id === "number") {
-        const idx = orders.findIndex((o) => o.id === msg.id);
-        if (idx === -1) return;
-        const o = orders[idx];
-        if (o.status === "waiting") {
-          o.status = "calling";
-        } else {
-          // calling -> complete -> remove
-          orders.splice(idx, 1);
-        }
-        broadcastState(wss);
+      } else if (message.type === "toggle" && typeof message.id === "number") {
+        if (toggleOrder(message.id)) broadcastState(wss);
       }
-    } catch (e) {
-      // ignore parse errors
+    } catch (error) {
+      console.error("Failed to handle WebSocket message", error);
     }
-  });
-
-  ws.on("close", () => {
-    // no-op
   });
 });
 
 server.listen(PORT, () => {
   console.log(`Server listening on http://0.0.0.0:${PORT} (WebSocket on same port)`);
+  console.log(`Order log: ${DATA_FILE}`);
 });

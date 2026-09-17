@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { WS_BASE } from "@/lib/api";
 
 type Order = {
   id: number;
@@ -18,8 +19,7 @@ export default function ViewerPage() {
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   function connect() {
-    const url = `wss://cfws.tokuzou.moe`;
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(WS_BASE);
     wsRef.current = ws;
 
     ws.addEventListener("open", () => {
@@ -171,7 +171,7 @@ export default function ViewerPage() {
       <div className="w-full">
         <header className="mb-6 flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl md:text-5xl font-bold tracking-tight">ご注文番号</h1>
+            <h1 className="text-3xl md:text-5xl font-bold tracking-tight">受取はこちら</h1>
             <p className="text-sm text-slate-600 mt-1">番号が表示されたらお渡し口までお越しください</p>
           </div>
 

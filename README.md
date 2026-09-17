@@ -2,6 +2,20 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+環境変数を用意します。
+
+```bash
+cp .env.example .env.local
+```
+
+`NEXT_PUBLIC_API_BASE` には、ブラウザから到達できるオーダーAPIのURLを指定してください。WebSocket接続先もこの値から自動生成されます（`http` → `ws`、`https` → `wss`）。未設定時は `http://localhost:4000` を使用します。
+
+ローカルでは、別ターミナルでAPI/WebSocketサーバーも起動します。
+
+```bash
+node server/ws-server.js
+```
+
 First, run the development server:
 
 ```bash
